@@ -752,7 +752,8 @@ function POS({ products, batches, role, members, activeShift, appLogoUrl, logged
         status: 'completed', cashier_id: loggedInUserId, member_id: customerType==='Anggota'?selectedMember:null
       };
 
-      await db.transaction('rw', db.sales, db.products, db.product_batches, db.members, db.audit_logs, db.sync_queue, async () => {
+      // PERBAIKAN TS2554: Menggunakan format array pada db.transaction
+      await db.transaction('rw', [db.sales, db.products, db.product_batches, db.members, db.audit_logs, db.sync_queue], async () => {
         const dexieSaleData = { ...saleData, receiptNumber: saleData.receipt_number, shiftId: saleData.shift_id, cashierRole: role };
         await db.sales.add(dexieSaleData);
         await db.sync_queue.add({ id: generateUUID(), operation: 'INSERT', table_name: 'sales', payload: saleData, created_at: new Date().toISOString() });
@@ -905,9 +906,16 @@ function Products({ products, batches, role }: any) {
           <label className="flex items-center gap-2 text-xs font-bold text-slate-600 cursor-pointer"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} className="rounded" /> Tampilkan Arsip</label>
         </div>
         <div className="flex gap-3 w-full sm:w-auto items-center">
-          {role === 'Admin' || role === 'Inventory' ? ( <div className="bg-green-50 text-green-700 px-4 py-2 rounded-xl border border-green-200 text-xs font-black shadow-sm whitespace-nowrap">Nilai Persediaan: {formatRp(totalInventoryValue)}</div> ) : null}
-          {role === 'Admin' && ( <button onClick={() => { setFormData({ id: null, sku: '', name: '', category: '', unit: 'Pcs', hpp: 0, price: 0, memberPrice: 0, minStock: 10 }); setModalType('edit'); }} className="w-full sm:w-auto bg-[#DC2626] hover:bg-[#991B1B] text-white px-5 py-2 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md text-sm"><Plus size={16}/> Tambah</button> )}
-        </div>
+  {role === 'Admin' || role === 'Inventory' ? ( <div className="bg-green-50 text-green-700 px-4 py-2 rounded-xl border border-green-200 text-xs font-black shadow-sm whitespace-nowrap">Nilai Persediaan: {formatRp(totalInventoryValue)}</div> ) : null}
+  {role === 'Admin' && (
+    <>
+      <button onClick={() => { setFormData({ id: null, sku: '', name: '', category: '', unit: 'Pcs', hpp: 0, price: 0, memberPrice: 0, minStock: 10 }); setModalType('edit'); }} className="w-full sm:w-auto bg-[#DC2626] hover:bg-[#991B1B] text-white px-5 py-2 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md text-sm">
+        <Plus size={16}/> Tambah
+      </button>
+      <span className="hidden"></span>
+    </>
+  )}
+</div>
       </div>
       <div className="flex-1 overflow-auto custom-scrollbar">
         <table className="w-full text-left border-collapse min-w-[700px]">
@@ -1072,13 +1080,15 @@ function Inbound({ products, purchases, role }: any) {
       const batchNum = batchNumber || `BATCH-${Date.now().toString().slice(-6)}`;
       const expDate = expiryDate || new Date(Date.now() + 365*24*60*60*1000).toISOString().split('T')[0];
 
-      await db.transaction('rw', db.purchases, db.products, db.product_batches, db.audit_logs, db.sync_queue, async () => {
+      // PERBAIKAN TS2554: Menggunakan format array pada db.transaction
+      await db.transaction('rw', [db.purchases, db.products, db.product_batches, db.audit_logs, db.sync_queue], async () => {
         await db.purchases.update(currentPO.id, { status: 'received' });
         await db.sync_queue.add({ id: generateUUID(), operation: 'UPDATE', table_name: 'purchases', payload: { id: currentPO.id, status: 'received' }, created_at: new Date().toISOString() });
         
         if (gQty > 0) {
           const batchId = generateUUID();
-          const batch = { id: batchId, product_id: prod.id, batch_number: batchNum, qty: gQty, initial_qty: gQty, hpp: item.price, received_date: new Date().toISOString().split('T')[0], expiry_date: expDate, condition: 'Baik' };
+          // PERBAIKAN TS2345: Menambahkan 'as const' pada properti condition
+          const batch = { id: batchId, product_id: prod.id, batch_number: batchNum, qty: gQty, initial_qty: gQty, hpp: item.price, received_date: new Date().toISOString().split('T')[0], expiry_date: expDate, condition: 'Baik' as const };
           await db.product_batches.add({ ...batch, productId: batch.product_id, batchNumber: batch.batch_number, initialQty: batch.initial_qty, receivedDate: batch.received_date, expiryDate: batch.expiry_date, createdAt: new Date().toISOString() });
           await db.sync_queue.add({ id: generateUUID(), operation: 'INSERT', table_name: 'product_batches', payload: batch, created_at: new Date().toISOString() });
           
@@ -1091,7 +1101,8 @@ function Inbound({ products, purchases, role }: any) {
         }
         if (dQty > 0) {
           const dbatchId = generateUUID();
-          const dbatch = { id: dbatchId, product_id: prod.id, batch_number: `${batchNum}-DMG`, qty: dQty, initial_qty: dQty, hpp: item.price, received_date: new Date().toISOString().split('T')[0], expiry_date: expDate, condition: 'Rusak' };
+          // PERBAIKAN TS2345: Menambahkan 'as const' pada properti condition
+          const dbatch = { id: dbatchId, product_id: prod.id, batch_number: `${batchNum}-DMG`, qty: dQty, initial_qty: dQty, hpp: item.price, received_date: new Date().toISOString().split('T')[0], expiry_date: expDate, condition: 'Rusak' as const };
           await db.product_batches.add({ ...dbatch, productId: dbatch.product_id, batchNumber: dbatch.batch_number, initialQty: dbatch.initial_qty, receivedDate: dbatch.received_date, expiryDate: dbatch.expiry_date, createdAt: new Date().toISOString() });
           await db.sync_queue.add({ id: generateUUID(), operation: 'INSERT', table_name: 'product_batches', payload: dbatch, created_at: new Date().toISOString() });
         }
@@ -1216,7 +1227,8 @@ function Approvals({ sales, purchases, adjustments, stockOpnames, shifts, produc
 
   const approve = async (type: string, obj: any, accept: boolean) => {
     try {
-      await db.transaction('rw', db.sales, db.purchases, db.stock_opnames, db.shifts, db.products, db.product_batches, db.audit_logs, db.sync_queue, async () => {
+      // PERBAIKAN TS2554: Menggunakan format array pada db.transaction
+      await db.transaction('rw', [db.sales, db.purchases, db.stock_opnames, db.shifts, db.products, db.product_batches, db.audit_logs, db.sync_queue], async () => {
         if (type === 'cancel') {
           await db.sales.update(obj.id, { status: accept ? 'cancelled' : 'completed' });
           await db.sync_queue.add({ id: generateUUID(), operation: 'UPDATE', table_name: 'sales', payload: { id: obj.id, status: accept ? 'cancelled' : 'completed' }, created_at: new Date().toISOString() });
@@ -1251,12 +1263,13 @@ function Approvals({ sales, purchases, adjustments, stockOpnames, shifts, produc
                            await db.sync_queue.add({ id: generateUUID(), operation: 'UPDATE', table_name: 'product_batches', payload: { id: b.id, qty: b.qty - take }, created_at: new Date().toISOString() });
                         }
                      } else if (item.variance > 0) {
+                        // PERBAIKAN TS2345: Menambahkan 'as const' pada properti condition
                         const newBatch = {
                            id: generateUUID(), product_id: prod.id, batch_number: `OPN-${Date.now().toString().slice(-6)}`,
                            qty: item.variance, initial_qty: item.variance, hpp: prod.hpp,
                            received_date: new Date().toISOString().split('T')[0],
                            expiry_date: new Date(Date.now() + 365*24*60*60*1000).toISOString().split('T')[0],
-                           condition: 'Baik'
+                           condition: 'Baik' as const
                         };
                         await db.product_batches.add({...newBatch, productId: newBatch.product_id, batchNumber: newBatch.batch_number, initialQty: newBatch.initial_qty, receivedDate: newBatch.received_date, expiryDate: newBatch.expiry_date, createdAt: new Date().toISOString()});
                         await db.sync_queue.add({ id: generateUUID(), operation: 'INSERT', table_name: 'product_batches', payload: newBatch, created_at: new Date().toISOString() });
