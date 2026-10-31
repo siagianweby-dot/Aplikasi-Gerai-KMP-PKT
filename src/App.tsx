@@ -46,7 +46,7 @@ export interface ProductBatch {
   receivedDate: string;
   expiryDate: string;
   condition: 'Baik' | 'Rusak' | 'Kedaluwarsa';
-  createdAt: string;
+  createdAt?: string;
 }
 
 export interface MinStockSetting {
@@ -119,13 +119,11 @@ const generateUUID = () => {
 // ==================== SYNC ENGINE (OFFLINE-FIRST) ====================
 let isSyncingProcess = false;
 
-// 1. Mencatat Perubahan Lokal ke dalam Antrean Sync
 export const enqueueSync = async (operation: 'INSERT'|'UPDATE'|'DELETE', table_name: string, payload: any) => {
   await db.sync_queue.add({ id: generateUUID(), operation, table_name, payload, created_at: new Date().toISOString() });
-  triggerPushSync(); // Coba kirim seketika jika terkoneksi
+  triggerPushSync();
 };
 
-// 2. Fungsi Eksekutor: Mengirim Antrean ke Cloud Supabase (Push)
 export const triggerPushSync = async () => {
   if (!navigator.onLine || isSyncingProcess) return;
   isSyncingProcess = true;
@@ -137,7 +135,6 @@ export const triggerPushSync = async () => {
       try {
         let success = false;
         if (item.table_name === 'sales' && item.operation === 'INSERT') {
-          // Menyelesaikan Potensi Konflik Stok via RPC Supabase
           const { error } = await supabase.rpc('process_sale_sync', { p_sale: item.payload, p_items: item.payload.items });
           if (!error) success = true; else console.error('Sales Sync Error:', error);
         } else if (item.table_name === 'purchases' && item.operation === 'INSERT') {
@@ -161,7 +158,6 @@ export const triggerPushSync = async () => {
             success = true;
           }
         } else {
-          // CRUD Standar
           if (item.operation === 'INSERT') {
             const { error } = await supabase.from(item.table_name).insert(item.payload);
             if (!error || error.code === '23505') success = true; 
@@ -179,7 +175,6 @@ export const triggerPushSync = async () => {
   } finally { isSyncingProcess = false; }
 };
 
-// 3. Listener Perubahan dari Cloud (Pull / Realtime)
 export const startRealtimeSync = () => {
   const tables = ['products', 'product_batches', 'members', 'expenses', 'purchases', 'sales', 'shifts', 'stock_opnames', 'audit_logs'];
   tables.forEach(table => {
@@ -206,7 +201,6 @@ const logAudit = async (role: string, action: string, details: string) => {
   await enqueueSync('INSERT', 'audit_logs', payload);
 };
 
-// ==================== INVENTORY ENGINE ====================
 export const calculateProductStats = async (productId: string, settings: MinStockSetting) => {
   const periodMs = settings.periodDays * 24 * 60 * 60 * 1000;
   const cutoffDate = new Date(Date.now() - periodMs).toISOString();
@@ -238,7 +232,6 @@ export const calculateProductStats = async (productId: string, settings: MinStoc
   return { totalUnitsSold, dailyAverage, minStock, sellableStock, stockInTransit, status, recommendedOrder, calculationMethod: settings.calculationMethod };
 };
 
-// ==================== MAIN COMPONENT ====================
 export default function App() {
   const [loggedInRole, setLoggedInRole] = useState<string | null>(null);
   const [loggedInName, setLoggedInName] = useState<string | null>(null);
@@ -247,7 +240,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   
-  // Sync Status UI
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [syncItemsCount, setSyncItemsCount] = useState(0);
 
@@ -294,12 +286,10 @@ export default function App() {
     };
     seedSettings();
 
-    // Event Listeners Jaringan
     const handleOnline = () => { setIsOnline(true); triggerPushSync(); };
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline); window.addEventListener('offline', handleOffline);
 
-    // Hitung Antrean Sync Berjalan
     const interval = setInterval(async () => {
        const count = await db.sync_queue.count();
        setSyncItemsCount(count);
@@ -417,7 +407,6 @@ export default function App() {
         <header className="hidden lg:flex bg-white h-16 items-center justify-between px-8 border-b border-[#E2E8F0] shadow-sm z-0">
           <div className="flex items-center gap-4">
              <h2 className="text-lg font-bold text-[#1E293B]">{navItems.find(i => i.id === activeTab)?.label}</h2>
-             {/* SYNC INDICATOR UI */}
              <div className="flex items-center gap-3 border-l border-[#E2E8F0] pl-4">
                 {isOnline ? ( <div className="flex items-center gap-1.5 text-[10px] font-black text-green-700 bg-green-50 px-2.5 py-1 rounded border border-green-200 uppercase tracking-widest"><Wifi size={14} /> Terhubung Cloud</div> ) : ( <div className="flex items-center gap-1.5 text-[10px] font-black text-[#991B1B] bg-[#FEE2E2] px-2.5 py-1 rounded border border-[#991B1B] uppercase tracking-widest"><WifiOff size={14} /> Offline Mode</div> )}
                 {syncItemsCount > 0 ? ( <button onClick={triggerPushSync} className="flex items-center gap-1.5 text-[10px] font-black text-amber-700 bg-amber-50 hover:bg-amber-100 transition px-2.5 py-1 rounded border border-amber-300 uppercase tracking-widest cursor-pointer shadow-sm"><RefreshCw size={12} className="animate-spin"/> {syncItemsCount} Antrean Sync</button> ) : ( isOnline && <div className="flex items-center gap-1.5 text-[10px] font-black text-blue-700 bg-blue-50 px-2.5 py-1 rounded border border-blue-200 uppercase tracking-widest"><Cloud size={14} /> Tersinkronisasi</div> )}
@@ -488,7 +477,6 @@ function LoginScreen({ onLogin, appLogoUrl }: any) {
   );
 }
 
-// ==================== DASHBOARD & AUTO REORDER ====================
 function Dashboard({ products, batches, sales, role, purchases, shifts, stockOpnames, members, globalMinStockSetting }: any) {
   const [analyticsData, setAnalyticsData] = useState<any[]>([]);
   const activeProducts = products.filter((p: any) => !p.isArchived);
@@ -600,7 +588,6 @@ function MinStockSettingsView({ globalSetting, role }: any) {
     try {
       const p = { ...formData, periodDays: Number(formData.periodDays), percentage: Number(formData.percentage), leadTimeDays: Number(formData.leadTimeDays), safetyStock: Number(formData.safetyStock) };
       await db.min_stock_settings.put(p);
-      // await enqueueSync('UPDATE', 'app_settings', { id: 'global_min_stock', value: p }); // Jika mau disimpan ke server juga
       await logAudit(role, 'Ubah Pengaturan Stok Minimum', `Metode: ${formData.calculationMethod}, Periode: ${formData.periodDays} hari`);
       alert("Pengaturan stok minimum berhasil disimpan!");
     } catch(err) { alert("Gagal menyimpan pengaturan."); }
@@ -753,7 +740,6 @@ function POS({ products, batches, role, members, activeShift, appLogoUrl, logged
         const finalPrice = customerType==='Anggota' ? item.memberPrice : item.price;
         const sub = finalPrice * item.qty;
         totalHpp += itemHpp; totalProfit += (sub - itemHpp);
-        // Supabase DB snake_case mapping untuk items array
         allocItems.push({ ...item, product_id: item.productId, price: finalPrice, subtotal: sub });
         prodUpdates.push({ id: item.productId, reduce: item.qty });
       }
@@ -767,21 +753,16 @@ function POS({ products, batches, role, members, activeShift, appLogoUrl, logged
       };
 
       await db.transaction('rw', db.sales, db.products, db.product_batches, db.members, db.audit_logs, db.sync_queue, async () => {
-        // Simpan Penjualan ke Dexie
-        const dexieSaleData = { ...saleData, receiptNumber: saleData.receipt_number, shiftId: saleData.shift_id, cashierRole: role }; // mapping backward compatibility for frontend read
+        const dexieSaleData = { ...saleData, receiptNumber: saleData.receipt_number, shiftId: saleData.shift_id, cashierRole: role };
         await db.sales.add(dexieSaleData);
-        // Antrekan push ke Cloud (Supabase RPC process_sale_sync)
         await db.sync_queue.add({ id: generateUUID(), operation: 'INSERT', table_name: 'sales', payload: saleData, created_at: new Date().toISOString() });
         
-        // PENTING: Untuk product dan batch, KITA TIDAK ANTREKAN ke sync_queue 
-        // karena Supabase RPC sudah memotongnya secara server-side! Kita cuma potong Dexie lokal saja untuk visual real-time offline.
         for(const bu of batchUpdates) await db.product_batches.update(bu.id, {qty:bu.qty});
         for(const pu of prodUpdates) { const p = await db.products.get(pu.id); if(p) await db.products.update(p.id, {stock:p.stock-pu.reduce}); }
         
         if (customerType==='Anggota' && activeMember) {
           const up = payMethod==='Kredit' ? { creditBalance: activeMember.creditBalance + totalAmount } : { points: activeMember.points + Math.floor(totalAmount/10000) };
           await db.members.update(activeMember.id, up);
-          // Kita antrekan sinkronisasi member
           await db.sync_queue.add({ id: generateUUID(), operation: 'UPDATE', table_name: 'members', payload: { id: activeMember.id, ...up }, created_at: new Date().toISOString() });
         }
         
@@ -891,7 +872,7 @@ function Products({ products, batches, role }: any) {
       const payload = { 
         sku: formData.sku, name: formData.name, category: formData.category, unit: formData.unit, hpp: Number(formData.hpp), 
         price: Number(formData.price), member_price: Number(formData.memberPrice || formData.price), min_stock: Number(formData.minStock || 10),
-        is_archived: formData.isArchived || false // match postgres snake_case
+        is_archived: formData.isArchived || false
       };
       if (formData.id) {
         await db.products.update(formData.id, { ...payload, memberPrice: payload.member_price, minStock: payload.min_stock, isArchived: payload.is_archived });
@@ -1098,7 +1079,7 @@ function Inbound({ products, purchases, role }: any) {
         if (gQty > 0) {
           const batchId = generateUUID();
           const batch = { id: batchId, product_id: prod.id, batch_number: batchNum, qty: gQty, initial_qty: gQty, hpp: item.price, received_date: new Date().toISOString().split('T')[0], expiry_date: expDate, condition: 'Baik' };
-          await db.product_batches.add({ ...batch, productId: batch.product_id, batchNumber: batch.batch_number, initialQty: batch.initial_qty, receivedDate: batch.received_date, expiryDate: batch.expiry_date });
+          await db.product_batches.add({ ...batch, productId: batch.product_id, batchNumber: batch.batch_number, initialQty: batch.initial_qty, receivedDate: batch.received_date, expiryDate: batch.expiry_date, createdAt: new Date().toISOString() });
           await db.sync_queue.add({ id: generateUUID(), operation: 'INSERT', table_name: 'product_batches', payload: batch, created_at: new Date().toISOString() });
           
           const currentBatches = await db.product_batches.where('productId').equals(prod.id).toArray();
@@ -1111,7 +1092,7 @@ function Inbound({ products, purchases, role }: any) {
         if (dQty > 0) {
           const dbatchId = generateUUID();
           const dbatch = { id: dbatchId, product_id: prod.id, batch_number: `${batchNum}-DMG`, qty: dQty, initial_qty: dQty, hpp: item.price, received_date: new Date().toISOString().split('T')[0], expiry_date: expDate, condition: 'Rusak' };
-          await db.product_batches.add({ ...dbatch, productId: dbatch.product_id, batchNumber: dbatch.batch_number, initialQty: dbatch.initial_qty, receivedDate: dbatch.received_date, expiryDate: dbatch.expiry_date });
+          await db.product_batches.add({ ...dbatch, productId: dbatch.product_id, batchNumber: dbatch.batch_number, initialQty: dbatch.initial_qty, receivedDate: dbatch.received_date, expiryDate: dbatch.expiry_date, createdAt: new Date().toISOString() });
           await db.sync_queue.add({ id: generateUUID(), operation: 'INSERT', table_name: 'product_batches', payload: dbatch, created_at: new Date().toISOString() });
         }
         const auditPayload = { id: generateUUID(), timestamp: new Date().toISOString(), role: 'Inventory', action: 'Penerimaan Inbound & Batch', details: `Menerima PO ${currentPO.poNumber}: Baik (${gQty}), Rusak (${dQty})` };
@@ -1154,7 +1135,7 @@ function StockOpnameView({ products, stockOpnames, role, loggedInUserId }: any) 
 
   const submitOpname = async () => {
     try {
-      const soData = { id: generateUUID(), date: new Date().toISOString(), status: 'pending', items: opnameItems, requested_by: loggedInUserId, notes };
+      const soData: any = { id: generateUUID(), date: new Date().toISOString(), status: 'pending', items: opnameItems, requested_by: loggedInUserId, notes };
       await db.stock_opnames.add(soData);
       await enqueueSync('INSERT', 'stock_opnames', soData);
       await logAudit(role, 'Pengajuan Stock Opname', 'Mengirim laporan opname ke Admin');
@@ -1277,7 +1258,7 @@ function Approvals({ sales, purchases, adjustments, stockOpnames, shifts, produc
                            expiry_date: new Date(Date.now() + 365*24*60*60*1000).toISOString().split('T')[0],
                            condition: 'Baik'
                         };
-                        await db.product_batches.add({...newBatch, productId: newBatch.product_id, batchNumber: newBatch.batch_number, initialQty: newBatch.initial_qty, receivedDate: newBatch.received_date, expiryDate: newBatch.expiry_date});
+                        await db.product_batches.add({...newBatch, productId: newBatch.product_id, batchNumber: newBatch.batch_number, initialQty: newBatch.initial_qty, receivedDate: newBatch.received_date, expiryDate: newBatch.expiry_date, createdAt: new Date().toISOString()});
                         await db.sync_queue.add({ id: generateUUID(), operation: 'INSERT', table_name: 'product_batches', payload: newBatch, created_at: new Date().toISOString() });
                      }
                      const updatedBatches = await db.product_batches.where('productId').equals(prod.id).toArray();
@@ -1391,9 +1372,11 @@ function Reports({ products, sales, expenses, role }: any) {
     const totalBiayaOp = expenses.reduce((sum: number, x: any) => sum + x.amount, 0);
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["LAPORAN KEUANGAN GERAI KMP PKT"], ["Tanggal Cetak:", new Date().toLocaleString('id-ID')], [], ["PENGUKURAN KEUANGAN", "NOMINAL (IDR)"], ["Total Transaksi Sukses", completedSales.length], ["Total Omzet", totalOmzet], ["Total HPP", totalHppAll], ["Laba Kotor", totalOmzet - totalHppAll], ["Total Biaya Operasional", totalBiayaOp], ["Laba Bersih Operasional", (totalOmzet - totalHppAll) - totalBiayaOp]]), "Ringkasan Laba Rugi");
-    const productRows = [["RINCIAN PENJUALAN PER PRODUK"], [], ["Nama Produk", "Total Terjual (Qty)", "Total Omzet (Rp)", "Estimasi Laba (Rp)"]]; productSalesList.forEach(p => productRows.push([p.name, p.qty, p.revenue, p.profit]));
+    const productRows: any[][] = [["RINCIAN PENJUALAN PER PRODUK"], [], ["Nama Produk", "Total Terjual (Qty)", "Total Omzet (Rp)", "Estimasi Laba (Rp)"]]; 
+    productSalesList.forEach(p => productRows.push([p.name, String(p.qty), String(p.revenue), String(p.profit)]));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(productRows), "Rincian Produk Terjual");
-    const salesRows = [["DAFTAR TRANSAKSI PENJUALAN SUKSES"], [], ["No. Struk", "Waktu", "Metode Pembayaran", "Total (Rp)", "Laba (Rp)"]]; completedSales.forEach((s: any) => salesRows.push([s.receiptNumber || s.receipt_number, new Date(s.date).toLocaleString('id-ID'), s.paymentMethod || s.payment_method, s.total, s.profit || 0]));
+    const salesRows: any[][] = [["DAFTAR TRANSAKSI PENJUALAN SUKSES"], [], ["No. Struk", "Waktu", "Metode Pembayaran", "Total (Rp)", "Laba (Rp)"]]; 
+    completedSales.forEach((s: any) => salesRows.push([s.receiptNumber || s.receipt_number, new Date(s.date).toLocaleString('id-ID'), s.paymentMethod || s.payment_method, String(s.total), String(s.profit || 0)]));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(salesRows), "Daftar Transaksi");
     XLSX.writeFile(wb, `Laporan_Gerai_KMP_PKT_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
