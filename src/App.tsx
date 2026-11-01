@@ -491,7 +491,7 @@ function Dashboard({ products, batches, sales, role, purchases, shifts, stockOpn
       };
       loadAnalytics();
     }
-  }, [activeProducts, sales, batches, purchases, globalMinStockSetting, role]);
+  }, [products, sales, batches, purchases, globalMinStockSetting, role]);
 
   const completedSales = sales.filter((s: any) => s.status === 'completed');
   const today = new Date().toISOString().split('T')[0];
