@@ -1328,11 +1328,14 @@ function Approvals({ sales, purchases, adjustments, stockOpnames, shifts, produc
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <CardList title="Verifikasi Setoran Uang Tutup Shift" data={pendingShifts} type="shift" renderItem={(d:any) => <div className="text-sm font-bold text-red-600">Shift: {d.shiftNumber} ({d.cashierName}) <br/><span className="text-xs text-slate-500 font-bold block mt-1">Uang Seharusnya: {formatRp(d.expectedCash || d.expected_cash)} | Uang Disetor: {formatRp(d.physicalCash || d.physical_cash)} <br/> Selisih: {formatRp(d.variance)}</span></div>} />
-      <CardList title="Pengajuan Batal Transaksi (Kasir)" data={pendingCancels} type="cancel" renderItem={(d:any) => <div className="text-sm font-bold">TRX: {d.receiptNumber || d.receipt_number} <span className="text-[#DC2626] ml-2 block sm:inline">{formatRp(d.total)}</span><p className="text-[10px] font-bold text-[#64748B] mt-1">{formatDate(d.date, true)}</p></div>} />
-      <CardList title="Pengajuan Purchase Order (PO) Gudang" data={pendingPO} type="po" renderItem={(d:any) => <div className="text-sm font-bold">PO: {d.poNumber || d.po_number} (Supplier: {d.supplier})<span className="text-[#64748B] block text-xs mt-1">{d.items[0]?.name} (Qty: {d.items[0]?.qty}) - Total: {formatRp(d.total)}</span></div>} />
-      <CardList title="Pengajuan Berita Acara Stock Opname" data={pendingOpname} type="opname" renderItem={(d:any) => <div className="text-sm font-bold">Opname Tanggal: {formatDate(d.date, true)}<span className="text-[#64748B] block text-xs mt-1">Total Item Diperiksa: {d.items.length} item</span></div>} />
-    </div>
+  <CardList title="Verifikasi Setoran Uang Tutup Shift" data={pendingShifts} type="shift" renderItem={(d:any) => <div className="text-sm font-bold text-red-600">Shift: {d.shiftNumber} ({d.cashierName}) <br/><span className="text-xs text-slate-500 font-bold block mt-1">Uang Seharusnya: {formatRp(d.expectedCash || d.expected_cash)} | Uang Disetor: {formatRp(d.physicalCash || d.physical_cash)} <br/> Selisih: {formatRp(d.variance)}</span></div>} />
+  
+  <CardList title="Pengajuan Batal Transaksi (Kasir)" data={pendingCancels} type="cancel" renderItem={(d:any) => <div className="text-sm font-bold">TRX: {d.receiptNumber || d.receipt_number} <span className="text-[#DC2626] ml-2 block sm:inline">{formatRp(d.total)}</span><p className="text-[10px] font-bold text-[#64748B] mt-1">{formatDate(d.date, true)}</p></div>} />
+  
+  <CardList title="Pengajuan Purchase Order (PO) Gudang" data={pendingPO} type="po" renderItem={(d:any) => <div className="text-sm font-bold">PO: {d.poNumber || d.po_number} (Supplier: {d.supplier})<span className="text-[#64748B] block text-xs mt-1">{d.items?.[0]?.name || 'Item tidak ditemukan'} (Qty: {d.items?.[0]?.qty || 0}) - Total: {formatRp(d.total)}</span></div>} />
+  
+  <CardList title="Pengajuan Berita Acara Stock Opname" data={pendingOpname} type="opname" renderItem={(d:any) => <div className="text-sm font-bold">Opname Tanggal: {formatDate(d.date, true)}<span className="text-[#64748B] block text-xs mt-1">Total Item Diperiksa: {d.items?.length || 0} item</span></div>} />
+</div>
   );
 }
 
