@@ -302,9 +302,21 @@ export default function App() {
     if (loggedInRole && isOnline) {
       // Fungsi untuk menyedot data Cloud ke Lokal saat perangkat baru online
       const pullInitialData = async () => {
-        const tables = ['products', 'product_batches', 'members', 'expenses', 'purchases', 'sales', 'shifts', 'stock_opnames', 'audit_logs'];
-        for (const table of tables) {
-          const { data, error } = await supabase.from(table).select('*');
+        // Kita gunakan query relasional untuk tabel yang memiliki detail item
+        const fetchQueries = [
+          { table: 'products', query: '*' },
+          { table: 'product_batches', query: '*' },
+          { table: 'members', query: '*' },
+          { table: 'expenses', query: '*' },
+          { table: 'shifts', query: '*' },
+          { table: 'audit_logs', query: '*' },
+          { table: 'purchases', query: '*, items:purchase_items(*)' },
+          { table: 'sales', query: '*, items:sale_items(*)' },
+          { table: 'stock_opnames', query: '*, items:stock_opname_items(*)' }
+        ];
+
+        for (const { table, query } of fetchQueries) {
+          const { data, error } = await supabase.from(table).select(query);
           if (data && !error) {
             await db.table(table).bulkPut(data); 
           }
@@ -1088,8 +1100,12 @@ function Inbound({ products, purchases, role }: any) {
     if (!currentPO) return;
     try {
       const gQty = Number(goodQty || 0); const dQty = Number(damagedQty || 0);
-      const item = currentPO.items[0]; const prod = products.find((p: any) => p.id === item.productId);
-      if (!prod) return;
+      
+      const item = currentPO.items?.[0];
+      if (!item) return alert("Gagal memproses Inbound: Detail item tidak ditemukan.");
+      
+      const prod = products.find((p: any) => p.id === (item.productId || item.product_id));
+      if (!prod) return alert("Gagal memproses Inbound: Master produk tidak ditemukan.");
 
       const batchNum = batchNumber || `BATCH-${Date.now().toString().slice(-6)}`;
       const expDate = expiryDate || new Date(Date.now() + 365*24*60*60*1000).toISOString().split('T')[0];
