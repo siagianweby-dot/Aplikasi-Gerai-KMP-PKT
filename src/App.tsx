@@ -300,8 +300,22 @@ export default function App() {
 
   useEffect(() => {
     if (loggedInRole && isOnline) {
-      startRealtimeSync();
-      triggerPushSync();
+      // Fungsi untuk menyedot data Cloud ke Lokal saat perangkat baru online
+      const pullInitialData = async () => {
+        const tables = ['products', 'product_batches', 'members', 'expenses', 'purchases', 'sales', 'shifts', 'stock_opnames', 'audit_logs'];
+        for (const table of tables) {
+          const { data, error } = await supabase.from(table).select('*');
+          if (data && !error) {
+            await db.table(table).bulkPut(data); 
+          }
+        }
+      };
+      
+      // Eksekusi penarikan data, lalu mulai sinkronisasi
+      pullInitialData().then(() => {
+        startRealtimeSync();
+        triggerPushSync();
+      });
     }
   }, [loggedInRole, isOnline]);
 
