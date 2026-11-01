@@ -119,6 +119,31 @@ const generateUUID = () => {
 // ==================== SYNC ENGINE (OFFLINE-FIRST) ====================
 let isSyncingProcess = false;
 
+// 0. Mapper: Mencegah undefined dengan mengubah snake_case (Supabase) ke camelCase (Dexie)
+const mapToLocal = (data: any) => {
+  if (!data) return data;
+  const mapped = { ...data };
+  const mapKey = (snake: string, camel: string) => { 
+    if (mapped[snake] !== undefined) { mapped[camel] = mapped[snake]; delete mapped[snake]; } 
+  };
+  
+  mapKey('member_price', 'memberPrice'); mapKey('min_stock', 'minStock'); mapKey('is_archived', 'isArchived');
+  mapKey('product_id', 'productId'); mapKey('batch_number', 'batchNumber'); mapKey('initial_qty', 'initialQty');
+  mapKey('received_date', 'receivedDate'); mapKey('expiry_date', 'expiryDate'); mapKey('no_induk', 'noInduk');
+  mapKey('join_date', 'joinDate'); mapKey('credit_balance', 'creditBalance'); mapKey('shift_number', 'shiftNumber');
+  mapKey('start_time', 'startTime'); mapKey('end_time', 'endTime'); mapKey('opening_balance', 'openingBalance');
+  mapKey('expected_cash', 'expectedCash'); mapKey('physical_cash', 'physicalCash'); mapKey('cash_details', 'cashDetails');
+  mapKey('receipt_number', 'receiptNumber'); mapKey('shift_id', 'shiftId'); mapKey('member_id', 'memberId');
+  mapKey('cashier_id', 'cashierId'); mapKey('hpp_total', 'hppTotal'); mapKey('payment_method', 'paymentMethod');
+  mapKey('payment_received', 'paymentReceived'); mapKey('po_number', 'poNumber');
+  
+  // Map relasi nested items jika ada (seperti sale_items, purchase_items)
+  if (mapped.items && Array.isArray(mapped.items)) {
+      mapped.items = mapped.items.map((item: any) => mapToLocal(item));
+  }
+  return mapped;
+};
+
 export const enqueueSync = async (operation: 'INSERT'|'UPDATE'|'DELETE', table_name: string, payload: any) => {
   await db.sync_queue.add({ id: generateUUID(), operation, table_name, payload, created_at: new Date().toISOString() });
   triggerPushSync();
@@ -134,9 +159,11 @@ export const triggerPushSync = async () => {
     for (const item of queue) {
       try {
         let success = false;
+        let sbError: any = null; // Menangkap detail error
+
         if (item.table_name === 'sales' && item.operation === 'INSERT') {
           const { error } = await supabase.rpc('process_sale_sync', { p_sale: item.payload, p_items: item.payload.items });
-          if (!error) success = true; else console.error('Sales Sync Error:', error);
+          if (!error) success = true; else sbError = error;
         } else if (item.table_name === 'purchases' && item.operation === 'INSERT') {
           const { items, ...poData } = item.payload;
           const { error } = await supabase.from('purchases').insert(poData);
@@ -146,7 +173,7 @@ export const triggerPushSync = async () => {
               await supabase.from('purchase_items').insert(poItems);
             }
             success = true;
-          }
+          } else sbError = error;
         } else if (item.table_name === 'stock_opnames' && item.operation === 'INSERT') {
           const { items, ...opnameData } = item.payload;
           const { error } = await supabase.from('stock_opnames').insert(opnameData);
@@ -156,21 +183,35 @@ export const triggerPushSync = async () => {
               await supabase.from('stock_opname_items').insert(opItems);
             }
             success = true;
-          }
+          } else sbError = error;
         } else {
           if (item.operation === 'INSERT') {
             const { error } = await supabase.from(item.table_name).insert(item.payload);
-            if (!error || error.code === '23505') success = true; 
+            if (!error || error.code === '23505') success = true; else sbError = error;
           } else if (item.operation === 'UPDATE') {
             const { error } = await supabase.from(item.table_name).update(item.payload).eq('id', item.payload.id);
-            if (!error) success = true;
+            if (!error) success = true; else sbError = error;
           } else if (item.operation === 'DELETE') {
             const { error } = await supabase.from(item.table_name).delete().eq('id', item.payload.id);
-            if (!error) success = true;
+            if (!error) success = true; else sbError = error;
           }
         }
-        if (success) await db.sync_queue.delete(item.id);
-      } catch (err) { console.error(`Sync error on ${item.table_name}:`, err); }
+
+        // Penyelesaian Antrean: Mencegah Infinite Loop akibat Data Corrupt
+        if (success) {
+          await db.sync_queue.delete(item.id);
+        } else if (sbError) {
+          console.error(`Supabase Sync Error [${item.table_name}]:`, sbError);
+          // Jika error adalah isu Validasi/Data (bukan masalah koneksi / Kode Postgres 08xxx / 53xxx)
+          if (sbError.code && !sbError.code.startsWith('08') && !sbError.code.startsWith('53')) {
+              await db.sync_queue.delete(item.id); // Paksa buang dari antrean lokal
+              console.warn(`Dropped corrupted payload for ${item.table_name} to prevent infinite loop.`);
+          }
+        }
+      } catch (err: any) { 
+        console.error(`Runtime crash on sync ${item.table_name}:`, err);
+        await db.sync_queue.delete(item.id); // Cegah app crash berulang
+      }
     }
   } finally { isSyncingProcess = false; }
 };
@@ -182,7 +223,7 @@ export const startRealtimeSync = () => {
         if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
           let data = payload.new as any;
           
-          // PERBAIKAN: Tarik detail items dari Cloud jika tabel memiliki relasi (PO, Kasir, Opname)
+          // PERBAIKAN: Tarik detail items dari Cloud jika tabel memiliki relasi anak (PO, Kasir, Opname)
           if (table === 'purchases') {
             const res = await supabase.from('purchases').select('*, items:purchase_items(*)').eq('id', data.id).single();
             if (res.data) data = res.data;
@@ -194,15 +235,17 @@ export const startRealtimeSync = () => {
             if (res.data) data = res.data;
           }
 
-          if (table === 'products') await db.products.put(data);
-        if (table === 'product_batches') await db.product_batches.put(data);
-        if (table === 'members') await db.members.put(data);
-        if (table === 'expenses') await db.expenses.put(data);
-        if (table === 'shifts') await db.shifts.put(data);
-        if (table === 'audit_logs') await db.audit_logs.put(data);
-        if (table === 'purchases') await db.purchases.put(data);
-        if (table === 'sales') await db.sales.put(data);
-        if (table === 'stock_opnames') await db.stock_opnames.put(data);
+          const mappedData = mapToLocal(data); // Eksekusi mapper sebelum masuk Dexie
+
+          if (table === 'products') await db.products.put(mappedData);
+          if (table === 'product_batches') await db.product_batches.put(mappedData);
+          if (table === 'members') await db.members.put(mappedData);
+          if (table === 'expenses') await db.expenses.put(mappedData);
+          if (table === 'shifts') await db.shifts.put(mappedData);
+          if (table === 'audit_logs') await db.audit_logs.put(mappedData);
+          if (table === 'purchases') await db.purchases.put(mappedData);
+          if (table === 'sales') await db.sales.put(mappedData);
+          if (table === 'stock_opnames') await db.stock_opnames.put(mappedData);
       }
     }).subscribe();
   });
@@ -331,7 +374,9 @@ export default function App() {
         for (const { table, query } of fetchQueries) {
           const { data, error } = await supabase.from(table).select(query);
           if (data && !error) {
-            await db.table(table).bulkPut(data); 
+            // MAPPING: Convert semua array data dari format snake_case ke camelCase
+            const mappedData = data.map(d => mapToLocal(d));
+            await db.table(table).bulkPut(mappedData); 
           }
         }
       };
@@ -530,7 +575,7 @@ function Dashboard({ products, batches, sales, role, purchases, shifts, stockOpn
       };
       loadAnalytics();
     }
-  }, [products, sales, batches, purchases, globalMinStockSetting, role]);
+  }, [activeProducts, sales, batches, purchases, globalMinStockSetting, role]);
 
   const completedSales = sales.filter((s: any) => s.status === 'completed');
   const today = new Date().toISOString().split('T')[0];
@@ -791,8 +836,7 @@ function POS({ products, batches, role, members, activeShift, appLogoUrl, logged
         status: 'completed', cashier_id: loggedInUserId, member_id: customerType==='Anggota'?selectedMember:null
       };
 
-      // PERBAIKAN TS2554: Menggunakan format array pada db.transaction
-      await db.transaction('rw', [db.sales, db.products, db.product_batches, db.members, db.audit_logs, db.sync_queue], async () => {
+      await db.transaction('rw', db.sales, db.products, db.product_batches, db.members, db.audit_logs, db.sync_queue, async () => {
         const dexieSaleData = { ...saleData, receiptNumber: saleData.receipt_number, shiftId: saleData.shift_id, cashierRole: role };
         await db.sales.add(dexieSaleData);
         await db.sync_queue.add({ id: generateUUID(), operation: 'INSERT', table_name: 'sales', payload: saleData, created_at: new Date().toISOString() });
@@ -945,16 +989,9 @@ function Products({ products, batches, role }: any) {
           <label className="flex items-center gap-2 text-xs font-bold text-slate-600 cursor-pointer"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} className="rounded" /> Tampilkan Arsip</label>
         </div>
         <div className="flex gap-3 w-full sm:w-auto items-center">
-  {role === 'Admin' || role === 'Inventory' ? ( <div className="bg-green-50 text-green-700 px-4 py-2 rounded-xl border border-green-200 text-xs font-black shadow-sm whitespace-nowrap">Nilai Persediaan: {formatRp(totalInventoryValue)}</div> ) : null}
-  {role === 'Admin' && (
-    <>
-      <button onClick={() => { setFormData({ id: null, sku: '', name: '', category: '', unit: 'Pcs', hpp: 0, price: 0, memberPrice: 0, minStock: 10 }); setModalType('edit'); }} className="w-full sm:w-auto bg-[#DC2626] hover:bg-[#991B1B] text-white px-5 py-2 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md text-sm">
-        <Plus size={16}/> Tambah
-      </button>
-      <span className="hidden"></span>
-    </>
-  )}
-</div>
+          {role === 'Admin' || role === 'Inventory' ? ( <div className="bg-green-50 text-green-700 px-4 py-2 rounded-xl border border-green-200 text-xs font-black shadow-sm whitespace-nowrap">Nilai Persediaan: {formatRp(totalInventoryValue)}</div> ) : null}
+          {role === 'Admin' && ( <button onClick={() => { setFormData({ id: null, sku: '', name: '', category: '', unit: 'Pcs', hpp: 0, price: 0, memberPrice: 0, minStock: 10 }); setModalType('edit'); }} className="w-full sm:w-auto bg-[#DC2626] hover:bg-[#991B1B] text-white px-5 py-2 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md text-sm"><Plus size={16}/> Tambah</button> )}
+        </div>
       </div>
       <div className="flex-1 overflow-auto custom-scrollbar">
         <table className="w-full text-left border-collapse min-w-[700px]">
@@ -1113,25 +1150,19 @@ function Inbound({ products, purchases, role }: any) {
     if (!currentPO) return;
     try {
       const gQty = Number(goodQty || 0); const dQty = Number(damagedQty || 0);
-      
-      const item = currentPO.items?.[0];
-      if (!item) return alert("Gagal memproses Inbound: Detail item tidak ditemukan.");
-      
-      const prod = products.find((p: any) => p.id === (item.productId || item.product_id));
-      if (!prod) return alert("Gagal memproses Inbound: Master produk tidak ditemukan.");
+      const item = currentPO.items[0]; const prod = products.find((p: any) => p.id === item.productId);
+      if (!prod) return;
 
       const batchNum = batchNumber || `BATCH-${Date.now().toString().slice(-6)}`;
       const expDate = expiryDate || new Date(Date.now() + 365*24*60*60*1000).toISOString().split('T')[0];
 
-      // PERBAIKAN TS2554: Menggunakan format array pada db.transaction
-      await db.transaction('rw', [db.purchases, db.products, db.product_batches, db.audit_logs, db.sync_queue], async () => {
+      await db.transaction('rw', db.purchases, db.products, db.product_batches, db.audit_logs, db.sync_queue, async () => {
         await db.purchases.update(currentPO.id, { status: 'received' });
         await db.sync_queue.add({ id: generateUUID(), operation: 'UPDATE', table_name: 'purchases', payload: { id: currentPO.id, status: 'received' }, created_at: new Date().toISOString() });
         
         if (gQty > 0) {
           const batchId = generateUUID();
-          // PERBAIKAN TS2345: Menambahkan 'as const' pada properti condition
-          const batch = { id: batchId, product_id: prod.id, batch_number: batchNum, qty: gQty, initial_qty: gQty, hpp: item.price, received_date: new Date().toISOString().split('T')[0], expiry_date: expDate, condition: 'Baik' as const };
+          const batch = { id: batchId, product_id: prod.id, batch_number: batchNum, qty: gQty, initial_qty: gQty, hpp: item.price, received_date: new Date().toISOString().split('T')[0], expiry_date: expDate, condition: 'Baik' };
           await db.product_batches.add({ ...batch, productId: batch.product_id, batchNumber: batch.batch_number, initialQty: batch.initial_qty, receivedDate: batch.received_date, expiryDate: batch.expiry_date, createdAt: new Date().toISOString() });
           await db.sync_queue.add({ id: generateUUID(), operation: 'INSERT', table_name: 'product_batches', payload: batch, created_at: new Date().toISOString() });
           
@@ -1144,8 +1175,7 @@ function Inbound({ products, purchases, role }: any) {
         }
         if (dQty > 0) {
           const dbatchId = generateUUID();
-          // PERBAIKAN TS2345: Menambahkan 'as const' pada properti condition
-          const dbatch = { id: dbatchId, product_id: prod.id, batch_number: `${batchNum}-DMG`, qty: dQty, initial_qty: dQty, hpp: item.price, received_date: new Date().toISOString().split('T')[0], expiry_date: expDate, condition: 'Rusak' as const };
+          const dbatch = { id: dbatchId, product_id: prod.id, batch_number: `${batchNum}-DMG`, qty: dQty, initial_qty: dQty, hpp: item.price, received_date: new Date().toISOString().split('T')[0], expiry_date: expDate, condition: 'Rusak' };
           await db.product_batches.add({ ...dbatch, productId: dbatch.product_id, batchNumber: dbatch.batch_number, initialQty: dbatch.initial_qty, receivedDate: dbatch.received_date, expiryDate: dbatch.expiry_date, createdAt: new Date().toISOString() });
           await db.sync_queue.add({ id: generateUUID(), operation: 'INSERT', table_name: 'product_batches', payload: dbatch, created_at: new Date().toISOString() });
         }
@@ -1270,8 +1300,7 @@ function Approvals({ sales, purchases, adjustments, stockOpnames, shifts, produc
 
   const approve = async (type: string, obj: any, accept: boolean) => {
     try {
-      // PERBAIKAN TS2554: Menggunakan format array pada db.transaction
-      await db.transaction('rw', [db.sales, db.purchases, db.stock_opnames, db.shifts, db.products, db.product_batches, db.audit_logs, db.sync_queue], async () => {
+      await db.transaction('rw', db.sales, db.purchases, db.stock_opnames, db.shifts, db.products, db.product_batches, db.audit_logs, db.sync_queue, async () => {
         if (type === 'cancel') {
           await db.sales.update(obj.id, { status: accept ? 'cancelled' : 'completed' });
           await db.sync_queue.add({ id: generateUUID(), operation: 'UPDATE', table_name: 'sales', payload: { id: obj.id, status: accept ? 'cancelled' : 'completed' }, created_at: new Date().toISOString() });
@@ -1306,13 +1335,12 @@ function Approvals({ sales, purchases, adjustments, stockOpnames, shifts, produc
                            await db.sync_queue.add({ id: generateUUID(), operation: 'UPDATE', table_name: 'product_batches', payload: { id: b.id, qty: b.qty - take }, created_at: new Date().toISOString() });
                         }
                      } else if (item.variance > 0) {
-                        // PERBAIKAN TS2345: Menambahkan 'as const' pada properti condition
                         const newBatch = {
                            id: generateUUID(), product_id: prod.id, batch_number: `OPN-${Date.now().toString().slice(-6)}`,
                            qty: item.variance, initial_qty: item.variance, hpp: prod.hpp,
                            received_date: new Date().toISOString().split('T')[0],
                            expiry_date: new Date(Date.now() + 365*24*60*60*1000).toISOString().split('T')[0],
-                           condition: 'Baik' as const
+                           condition: 'Baik'
                         };
                         await db.product_batches.add({...newBatch, productId: newBatch.product_id, batchNumber: newBatch.batch_number, initialQty: newBatch.initial_qty, receivedDate: newBatch.received_date, expiryDate: newBatch.expiry_date, createdAt: new Date().toISOString()});
                         await db.sync_queue.add({ id: generateUUID(), operation: 'INSERT', table_name: 'product_batches', payload: newBatch, created_at: new Date().toISOString() });
@@ -1357,14 +1385,11 @@ function Approvals({ sales, purchases, adjustments, stockOpnames, shifts, produc
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-  <CardList title="Verifikasi Setoran Uang Tutup Shift" data={pendingShifts} type="shift" renderItem={(d:any) => <div className="text-sm font-bold text-red-600">Shift: {d.shiftNumber} ({d.cashierName}) <br/><span className="text-xs text-slate-500 font-bold block mt-1">Uang Seharusnya: {formatRp(d.expectedCash || d.expected_cash)} | Uang Disetor: {formatRp(d.physicalCash || d.physical_cash)} <br/> Selisih: {formatRp(d.variance)}</span></div>} />
-  
-  <CardList title="Pengajuan Batal Transaksi (Kasir)" data={pendingCancels} type="cancel" renderItem={(d:any) => <div className="text-sm font-bold">TRX: {d.receiptNumber || d.receipt_number} <span className="text-[#DC2626] ml-2 block sm:inline">{formatRp(d.total)}</span><p className="text-[10px] font-bold text-[#64748B] mt-1">{formatDate(d.date, true)}</p></div>} />
-  
-  <CardList title="Pengajuan Purchase Order (PO) Gudang" data={pendingPO} type="po" renderItem={(d:any) => <div className="text-sm font-bold">PO: {d.poNumber || d.po_number} (Supplier: {d.supplier})<span className="text-[#64748B] block text-xs mt-1">{d.items?.[0]?.name || 'Item tidak ditemukan'} (Qty: {d.items?.[0]?.qty || 0}) - Total: {formatRp(d.total)}</span></div>} />
-  
-  <CardList title="Pengajuan Berita Acara Stock Opname" data={pendingOpname} type="opname" renderItem={(d:any) => <div className="text-sm font-bold">Opname Tanggal: {formatDate(d.date, true)}<span className="text-[#64748B] block text-xs mt-1">Total Item Diperiksa: {d.items?.length || 0} item</span></div>} />
-</div>
+      <CardList title="Verifikasi Setoran Uang Tutup Shift" data={pendingShifts} type="shift" renderItem={(d:any) => <div className="text-sm font-bold text-red-600">Shift: {d.shiftNumber} ({d.cashierName}) <br/><span className="text-xs text-slate-500 font-bold block mt-1">Uang Seharusnya: {formatRp(d.expectedCash || d.expected_cash)} | Uang Disetor: {formatRp(d.physicalCash || d.physical_cash)} <br/> Selisih: {formatRp(d.variance)}</span></div>} />
+      <CardList title="Pengajuan Batal Transaksi (Kasir)" data={pendingCancels} type="cancel" renderItem={(d:any) => <div className="text-sm font-bold">TRX: {d.receiptNumber || d.receipt_number} <span className="text-[#DC2626] ml-2 block sm:inline">{formatRp(d.total)}</span><p className="text-[10px] font-bold text-[#64748B] mt-1">{formatDate(d.date, true)}</p></div>} />
+      <CardList title="Pengajuan Purchase Order (PO) Gudang" data={pendingPO} type="po" renderItem={(d:any) => <div className="text-sm font-bold">PO: {d.poNumber || d.po_number} (Supplier: {d.supplier})<span className="text-[#64748B] block text-xs mt-1">{d.items[0]?.name} (Qty: {d.items[0]?.qty}) - Total: {formatRp(d.total)}</span></div>} />
+      <CardList title="Pengajuan Berita Acara Stock Opname" data={pendingOpname} type="opname" renderItem={(d:any) => <div className="text-sm font-bold">Opname Tanggal: {formatDate(d.date, true)}<span className="text-[#64748B] block text-xs mt-1">Total Item Diperiksa: {d.items.length} item</span></div>} />
+    </div>
   );
 }
 
