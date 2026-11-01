@@ -176,12 +176,25 @@ export const triggerPushSync = async () => {
 };
 
 export const startRealtimeSync = () => {
-  const tables = ['products', 'product_batches', 'members', 'expenses', 'purchases', 'sales', 'shifts', 'stock_opnames', 'audit_logs'];
-  tables.forEach(table => {
-    supabase.channel(`public:${table}`).on('postgres_changes', { event: '*', schema: 'public', table: table }, async (payload) => {
-      if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-        const data = payload.new as any;
-        if (table === 'products') await db.products.put(data);
+    const tables = ['products', 'product_batches', 'members', 'expenses', 'purchases', 'sales', 'shifts', 'stock_opnames', 'audit_logs'];
+    tables.forEach(table => {
+      supabase.channel(`public:${table}`).on('postgres_changes', { event: '*', schema: 'public', table: table }, async (payload) => {
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          let data = payload.new as any;
+          
+          // PERBAIKAN: Tarik detail items dari Cloud jika tabel memiliki relasi (PO, Kasir, Opname)
+          if (table === 'purchases') {
+            const res = await supabase.from('purchases').select('*, items:purchase_items(*)').eq('id', data.id).single();
+            if (res.data) data = res.data;
+          } else if (table === 'sales') {
+            const res = await supabase.from('sales').select('*, items:sale_items(*)').eq('id', data.id).single();
+            if (res.data) data = res.data;
+          } else if (table === 'stock_opnames') {
+            const res = await supabase.from('stock_opnames').select('*, items:stock_opname_items(*)').eq('id', data.id).single();
+            if (res.data) data = res.data;
+          }
+
+          if (table === 'products') await db.products.put(data);
         if (table === 'product_batches') await db.product_batches.put(data);
         if (table === 'members') await db.members.put(data);
         if (table === 'expenses') await db.expenses.put(data);
