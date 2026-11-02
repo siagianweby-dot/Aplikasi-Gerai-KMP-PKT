@@ -260,6 +260,19 @@ export const startRealtimeSync = () => {
         if (table === 'purchases') await db.purchases.put(mappedData);
         if (table === 'sales') await db.sales.put(mappedData);
         if (table === 'stock_opnames') await db.stock_opnames.put(mappedData);
+      } else if (payload.eventType === 'DELETE') { // <--- PERBAIKAN: SENSOR DELETE
+        const oldId = payload.old?.id;
+        if (oldId) {
+           if (table === 'products') await db.products.delete(oldId);
+           if (table === 'product_batches') await db.product_batches.delete(oldId);
+           if (table === 'members') await db.members.delete(oldId);
+           if (table === 'expenses') await db.expenses.delete(oldId);
+           if (table === 'shifts') await db.shifts.delete(oldId);
+           if (table === 'audit_logs') await db.audit_logs.delete(oldId);
+           if (table === 'purchases') await db.purchases.delete(oldId);
+           if (table === 'sales') await db.sales.delete(oldId);
+           if (table === 'stock_opnames') await db.stock_opnames.delete(oldId);
+        }
       }
     }).subscribe();
   });
@@ -390,6 +403,14 @@ export default function App() {
           if (data && !error) {
             // MAPPING: Convert semua array data dari format snake_case ke camelCase
             const mappedData = data.map(d => mapToLocal(d));
+            
+            // PERBAIKAN: PEMBERSIHAN CERDAS (SMART CLEAR) 
+            // Hapus data hantu HANYA JIKA tidak ada antrean offline yang belum terkirim
+            const pendingQueue = await db.sync_queue.where('table_name').equals(table).toArray();
+            if (pendingQueue.length === 0) {
+                await db.table(table).clear();
+            }
+            
             await db.table(table).bulkPut(mappedData); 
           }
         }
@@ -897,7 +918,7 @@ function POS({ products, batches, role, members, activeShift, appLogoUrl, logged
            {receiptData.member_id && <div className="mt-2 text-center text-[10px] bg-slate-100 p-1 rounded">Transaksi Member / Tambahan Poin Tersimpan</div>}
       </div>
 
-      <div className="mt-6 flex gap-3 print:hidden"><button onClick={() => window.print()} className="flex-1 bg-[#F8FAFC] border-2 border-[#E2E8F0] text-[#1E293B] py-3 rounded-xl font-bold flex justify-center items-center gap-2 text-sm">Cetak</button><button onClick={() => setReceiptData(null)} className="flex-1 bg-[#DC2626] text-white py-3 rounded-xl font-bold shadow-md text-sm">Selesai</button></div>
+      <div className="mt-6 flex gap-3 print:hidden"><button onClick={() => window.print()} className="flex-1 bg-[#F8FAFC] border-2 border-[#E2E8F0] text-[#1E293B] py-3 rounded-xl font-bold flex justify-center items-center gap-2 text-sm"><Printer size={16} /> Cetak</button><button onClick={() => setReceiptData(null)} className="flex-1 bg-[#DC2626] text-white py-3 rounded-xl font-bold shadow-md text-sm">Selesai</button></div>
       <style>{`@media print { body * { visibility: hidden; } #receipt-print, #receipt-print * { visibility: visible; } #receipt-print { position: absolute; left: 0; top: 0; width: 100%; box-shadow: none; border: none; } }`}</style>
     </div></div>
   );
@@ -905,7 +926,7 @@ function POS({ products, batches, role, members, activeShift, appLogoUrl, logged
   return (
     <div className="flex h-[calc(100vh-8rem)] lg:h-[calc(100vh-10rem)] gap-0 lg:gap-6 relative">
       <div className="flex-1 flex flex-col bg-white rounded-2xl shadow-sm border border-[#E2E8F0] overflow-hidden">
-        <div className="p-4 bg-white border-b border-[#E2E8F0]"><div className="relative"><input type="text" placeholder="Cari barang atau SKU..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full px-4 py-3 rounded-xl border-2 border-[#E2E8F0] focus:outline-none focus:border-[#DC2626] font-bold text-sm bg-[#F8FAFC]" /></div></div>
+        <div className="p-4 bg-white border-b border-[#E2E8F0]"><div className="relative"><Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[#64748B]" size={18} /><input type="text" placeholder="Cari barang atau SKU..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-[#E2E8F0] focus:outline-none focus:border-[#DC2626] font-bold text-sm bg-[#F8FAFC]" /></div></div>
         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {filteredProds.map((p: any) => (
@@ -922,10 +943,10 @@ function POS({ products, batches, role, members, activeShift, appLogoUrl, logged
         </div>
       </div>
 
-      <button className="lg:hidden fixed bottom-6 right-6 bg-[#DC2626] text-white p-4 rounded-full shadow-2xl z-40" onClick={() => setIsCartOpen(true)}><span className="absolute -top-2 -right-2 bg-white text-[#DC2626] font-black border-2 border-[#DC2626] rounded-full w-7 h-7 flex items-center justify-center text-xs">{cart.length}</span></button>
+      <button className="lg:hidden fixed bottom-6 right-6 bg-[#DC2626] text-white p-4 rounded-full shadow-2xl z-40" onClick={() => setIsCartOpen(true)}><ShoppingCart size={24} /><span className="absolute -top-2 -right-2 bg-white text-[#DC2626] font-black border-2 border-[#DC2626] rounded-full w-7 h-7 flex items-center justify-center text-xs">{cart.length}</span></button>
 
       <div className={`fixed inset-y-0 right-0 w-full sm:w-96 bg-white shadow-2xl z-50 transform ${isCartOpen ? 'translate-x-0' : 'translate-x-full'} lg:relative lg:translate-x-0 transition-transform duration-300 flex flex-col shrink-0 border-l lg:border-none lg:rounded-2xl border-[#E2E8F0]`}>
-        <div className="p-4 bg-white border-b border-[#E2E8F0] flex justify-between items-center lg:rounded-t-2xl"><h3 className="font-black text-[#1E293B] flex items-center gap-2">Keranjang</h3><div className="flex items-center gap-3"><span className="bg-[#FEE2E2] text-[#991B1B] text-xs font-black px-2 py-1 rounded-md">{cart.length} Item</span><button className="lg:hidden text-[#64748B]" onClick={() => setIsCartOpen(false)}>X</button></div></div>
+        <div className="p-4 bg-white border-b border-[#E2E8F0] flex justify-between items-center lg:rounded-t-2xl"><h3 className="font-black text-[#1E293B] flex items-center gap-2"><ShoppingCart size={18}/> Keranjang</h3><div className="flex items-center gap-3"><span className="bg-[#FEE2E2] text-[#991B1B] text-xs font-black px-2 py-1 rounded-md">{cart.length} Item</span><button className="lg:hidden text-[#64748B]" onClick={() => setIsCartOpen(false)}><X size={20} /></button></div></div>
         
         <div className="p-4 border-b space-y-3">
              <div className="flex gap-2 p-1 bg-slate-100 rounded-lg">
@@ -942,8 +963,8 @@ function POS({ products, batches, role, members, activeShift, appLogoUrl, logged
         <div className="flex-1 overflow-y-auto p-3 custom-scrollbar space-y-2 bg-[#F8FAFC]">
           {cart.map(item => (
             <div key={item.productId} className="bg-white border border-[#E2E8F0] p-3 rounded-xl shadow-sm">
-              <div className="flex justify-between mb-2"><span className="font-bold text-xs text-[#1E293B]">{item.name}</span><button onClick={() => setCart(cart.filter(i => i.productId !== item.productId))} className="text-[#64748B] hover:text-[#DC2626]">Hapus</button></div>
-              <div className="flex justify-between items-center"><span className="text-xs font-black text-[#DC2626]">{formatRp(customerType==='Anggota'?item.memberPrice:item.price)}</span><div className="flex items-center gap-2 bg-[#F8FAFC] rounded-lg p-1 border border-[#E2E8F0]"><button onClick={() => updateQty(item.productId, -1)} className="p-1 bg-white rounded shadow-sm text-[#1E293B]">-</button><span className="text-xs font-black w-4 text-center">{item.qty}</span><button onClick={() => updateQty(item.productId, 1)} className="p-1 bg-white rounded shadow-sm text-[#1E293B]">+</button></div></div>
+              <div className="flex justify-between mb-2"><span className="font-bold text-xs text-[#1E293B]">{item.name}</span><button onClick={() => setCart(cart.filter(i => i.productId !== item.productId))} className="text-[#64748B] hover:text-[#DC2626]"><Trash2 size={14} /></button></div>
+              <div className="flex justify-between items-center"><span className="text-xs font-black text-[#DC2626]">{formatRp(customerType==='Anggota'?item.memberPrice:item.price)}</span><div className="flex items-center gap-2 bg-[#F8FAFC] rounded-lg p-1 border border-[#E2E8F0]"><button onClick={() => updateQty(item.productId, -1)} className="p-1 bg-white rounded shadow-sm text-[#1E293B]"><Minus size={12}/></button><span className="text-xs font-black w-4 text-center">{item.qty}</span><button onClick={() => updateQty(item.productId, 1)} className="p-1 bg-white rounded shadow-sm text-[#1E293B]"><Plus size={12}/></button></div></div>
             </div>
           ))}
         </div>
